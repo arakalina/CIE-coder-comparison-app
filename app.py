@@ -201,7 +201,8 @@ def apply_severity_sorting(df_subset, sort_order, severity_filter):
         
     return df_subset
 
-def export_final_sheets(df_log):
+# --- EXPORT HELPERS (WIDE & LONG) ---
+def export_wide_sheets(df_log):
     df_A = pd.read_excel("Alina_All Scenario_Codes_simple.xlsb", engine='pyxlsb')
     df_S = pd.read_excel("S_Scores.xlsx")
     
@@ -230,11 +231,32 @@ def export_final_sheets(df_log):
             s_s = pd.to_numeric(df_S[col], errors='coerce')
             df_Avg[col] = pd.concat([s_a, s_s], axis=1).mean(axis=1, skipna=True)
 
-    output_filename = "Final_Scoring_Outputs.xlsx"
+    output_filename = "Final_Scoring_Outputs_Wide.xlsx"
     with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
         df_A.to_excel(writer, sheet_name="A_Final_Scores", index=False)
         df_S.to_excel(writer, sheet_name="S_Final_Scores", index=False)
         df_Avg.to_excel(writer, sheet_name="Averages", index=False)
+
+    return output_filename, df_A, df_S, df_Avg
+
+def export_long_sheets(df_log, df_A, df_S, df_Avg):
+    melt_A = df_A.melt(id_vars=['Document name'], var_name='Category', value_name='Score_A')
+    melt_S = df_S.melt(id_vars=['Document name'], var_name='Category', value_name='Score_S')
+    melt_Avg = df_Avg.melt(id_vars=['Document name'], var_name='Category', value_name='Average_Score')
+
+    long_combined = pd.merge(melt_A, melt_S, on=['Document name', 'Category'], how='outer')
+    long_combined = pd.merge(long_combined, melt_Avg, on=['Document name', 'Category'], how='outer')
+
+    long_combined['Participant'] = long_combined['Document name'].apply(lambda x: str(x).split('_s')[0] if '_s' in str(x) else str(x))
+    long_combined['Scenario'] = long_combined['Document name'].apply(lambda x: str(x).split('_s')[1] if '_s' in str(x) else '')
+
+    cols_order = ['Document name', 'Participant', 'Scenario', 'Category', 'Score_A', 'Score_S', 'Average_Score']
+    long_combined = long_combined[cols_order]
+
+    output_filename = "Final_Scoring_Outputs_Long.xlsx"
+    with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+        long_combined.to_excel(writer, sheet_name="All_Scores_Long", index=False)
+        df_log.to_excel(writer, sheet_name="Discrepancy_Log_Audit", index=False)
 
     return output_filename
 
@@ -629,19 +651,54 @@ elif user == "A (Lead Scorer)":
                     save_log(df)
                     st.rerun()
 
+    # --- TAB 4: EXPORT FINAL SHEETS (WIDE & LONG) ---
     with tab4:
-        st.header("Generate Final Excel Sheets")
-        st.write("Click below to generate the 3 final sheets:")
-        st.write("1. **A's Final Scores**")
-        st.write("2. **S's Final Scores**")
-        st.write("3. **Averages of A and S**")
+        st.header("Generate & Download Final Excel Files")
+        st.write("Click below to generate and download the resolved scores in your preferred layout:")
         
-        if st.button("Generate & Download Excel File"):
-            filename = export_final_sheets(df)
-            with open(filename, "rb") as file:
-                st.download_button(
-                    label="📥 Download Final_Scoring_Outputs.xlsx",
-                    data=file,
-                    file_name="Final_Scoring_Outputs.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+        col_w, col_l = st.columns(2)
+        
+        with col_w:
+            st.subheader("📊 Wide Version")
+            st.write("Best for side-by-side comparison matrix viewing.")
+            st.write("Contains 3 worksheets:")
+            st.write("1. **`A_Final_Scores`**")
+            st.write("2. **`S_Final_Scores`**")
+            st.write("3. **`Averages`**")
+            
+            if st.button("Generate Wide Version"):
+                filename_w, df_A_w, df_S_w, df_Avg_w = export_wide_sheets(df)
+                st.session_state['file_wide'] = filename_w
+                st.session_state['df_A'] = df_A_w
+                st.session_state['df_S'] = df_S_w
+                st.session_state['df_Avg'] = df_Avg_w
+
+            if 'file_wide' in st.session_state:
+                with open(st.session_state['file_wide'], "rb") as f_w:
+                    st.download_button(
+                        label="📥 Download Wide Version (.xlsx)",
+                        data=f_w,
+                        file_name="Final_Scoring_Outputs_Wide.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+        with col_l:
+            st.subheader("📋 Long Version")
+            st.write("Best for statistical analysis (R, SPSS, Stata, Python).")
+            st.write("Contains 2 worksheets:")
+            st.write("1. **`All_Scores_Long`** (Document, Participant, Scenario, Category, A, S, Avg)")
+            st.write("2. **`Discrepancy_Log_Audit`** (Full resolution comments audit trail)")
+            
+            if st.button("Generate Long Version"):
+                filename_w, df_A_w, df_S_w, df_Avg_w = export_wide_sheets(df)
+                filename_l = export_long_sheets(df, df_A_w, df_S_w, df_Avg_w)
+                st.session_state['file_long'] = filename_l
+
+            if 'file_long' in st.session_state:
+                with open(st.session_state['file_long'], "rb") as f_l:
+                    st.download_button(
+                        label="📥 Download Long Version (.xlsx)",
+                        data=f_l,
+                        file_name="Final_Scoring_Outputs_Long.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
