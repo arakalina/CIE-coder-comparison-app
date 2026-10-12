@@ -1,0 +1,6 @@
+streamlit
+pandas
+numpy
+pyxlsb
+openpyxl
+st-gsheets-connection
