@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
 import os
 
 st.set_page_config(page_title="Scoring Discrepancy Resolver", layout="wide")
@@ -108,21 +109,59 @@ def get_score_color(score_str, category):
 
     return '#000000'
 
-# --- DATA LOADING & SAVING ---
+# --- DATA LOADING & SAVING VIA GOOGLE APPS SCRIPT ---
+def get_gas_url():
+    if "GAS_URL" in st.secrets:
+        return st.secrets["GAS_URL"]
+    return ""
+
 def load_log():
-    df = pd.read_csv("Discrepancy_Log.csv", dtype=str)
-    
-    if 'Revision_Round' in df.columns:
-        df['Revision_Round'] = pd.to_numeric(df['Revision_Round'], errors='coerce').fillna(1).astype(int)
-    
-    for col in ['Comment_S', 'Comment_A', 'Final_Score', 'Score_A', 'Score_S']:
-        if col in df.columns:
-            df[col] = df[col].replace(r'(?i)^nan$', '', regex=True).fillna('')
+    gas_url = get_gas_url()
+    if not gas_url:
+        st.error("⚠️ Google Apps Script URL not found in Streamlit Secrets. Please add GAS_URL to Secrets.")
+        st.stop()
+        
+    try:
+        response = requests.get(gas_url)
+        data = response.json()
+        if not data or len(data) < 2:
+            st.error("Google Sheet appears to be empty. Please verify data is pasted in cell A1.")
+            st.stop()
             
-    return df
+        headers = [str(h).strip() for h in data[0]]
+        rows = data[1:]
+        
+        cleaned_rows = []
+        for r in rows:
+            if len(r) < len(headers):
+                r = r + [''] * (len(headers) - len(r))
+            cleaned_rows.append(r[:len(headers)])
+            
+        df = pd.DataFrame(cleaned_rows, columns=headers)
+        
+        if 'Revision_Round' in df.columns:
+            df['Revision_Round'] = pd.to_numeric(df['Revision_Round'], errors='coerce').fillna(1).astype(int)
+        
+        for col in ['Comment_S', 'Comment_A', 'Final_Score', 'Score_A', 'Score_S']:
+            if col in df.columns:
+                df[col] = df[col].replace(r'(?i)^nan$', '', regex=True).fillna('')
+                
+        return df
+    except Exception as e:
+        st.error(f"Error fetching data from Google Sheet: {e}")
+        st.stop()
 
 def save_log(df):
-    df.to_csv("Discrepancy_Log.csv", index=False)
+    gas_url = get_gas_url()
+    if not gas_url:
+        st.error("⚠️ Google Apps Script URL not configured.")
+        return
+        
+    try:
+        data_2d = [df.columns.tolist()] + df.fillna('').astype(str).values.tolist()
+        requests.post(gas_url, json=data_2d)
+    except Exception as e:
+        st.error(f"Error saving data to Google Sheet: {e}")
 
 def normalize_score(s):
     s_str = str(s).strip()
@@ -202,10 +241,6 @@ def export_final_sheets(df_log):
 # --- APP LAYOUT ---
 st.title("Transcript Scoring Discrepancy Resolver")
 
-if not os.path.exists("Discrepancy_Log.csv"):
-    st.error("Discrepancy_Log.csv not found. Please run prep_data.py first!")
-    st.stop()
-
 df = load_log()
 score_options = ["0", "0.5", "1", "Missing Data"]
 
@@ -278,12 +313,10 @@ elif user == "S (Second Scorer)":
     else:
         st.info(f"📋 You have **{len(pending_s_raw)}** total individual discrepancies left to resolve.")
         
-        # Identify top document and section for grouping
         top_row = pending_s.iloc[0]
         target_doc = top_row['Document']
         target_sec = extract_section(top_row['Category'])
         
-        # Extract ALL items in pending_s sharing same Document and Section
         group_items = pending_s[
             (pending_s['Document'] == target_doc) & 
             (pending_s['Category'].apply(extract_section) == target_sec)
